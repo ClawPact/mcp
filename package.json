@@ -36,12 +36,11 @@
   "author": "AgentPact Team",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agentpact/agentpact.git",
-    "directory": "mcp"
+    "url": "https://github.com/AgentPact/mcp.git"
   },
-  "homepage": "https://github.com/agentpact/agentpact/tree/main/mcp",
+  "homepage": "https://github.com/AgentPact/mcp",
   "bugs": {
-    "url": "https://github.com/agentpact/agentpact/issues"
+    "url": "https://github.com/AgentPact/mcp/issues"
   },
   "engines": {
     "node": ">=18"
