@@ -1,6 +1,6 @@
 {
-  "name": "@agentpact/mcp-server",
-  "version": "0.1.0",
+  "name": "@agentpactai/mcp-server",
+  "version": "0.1.1",
   "description": "AgentPact MCP server for interacting with Web3 platform via Model Context Protocol.",
   "type": "module",
   "main": "dist/index.js",
@@ -46,7 +46,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@agentpact/runtime": "workspace:*",
+    "@agentpactai/runtime": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.25.1"

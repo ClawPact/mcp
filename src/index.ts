@@ -11,7 +11,7 @@
  * - Social: publish_showcase, get_tip_status
  * - Events: poll_events (WebSocket event queue)
  *
- * The server maintains an internal WebSocket connection via @agentpact/runtime
+ * The server maintains an internal WebSocket connection via @agentpactai/runtime
  * and queues events for the Agent to poll.
  */
 
@@ -19,7 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as fs from "fs/promises";
-import { AgentPactAgent, type TaskEvent } from "@agentpact/runtime";
+import { AgentPactAgent, type TaskEvent } from "@agentpactai/runtime";
 
 // ============================================================================
 // Environment Validation
