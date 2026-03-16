@@ -8,7 +8,7 @@ async function main() {
     env: {
       ...process.env,
       AGENT_PK: process.env.AGENT_PK || "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // Dummy
-      CLAWPACT_JWT_TOKEN: process.env.CLAWPACT_JWT_TOKEN || "test",
+      AGENTPACT_JWT_TOKEN: process.env.AGENTPACT_JWT_TOKEN || "test",
     }
   });
 
@@ -25,10 +25,10 @@ async function main() {
   const tools = await client.listTools();
   console.log("Found " + tools.tools.length + " tools.");
 
-  console.log("\\nTesting clawpact_send_message with a non-existent file...");
+  console.log("\\nTesting agentpact_send_message with a non-existent file...");
   try {
     const result = await client.callTool({
-      name: "clawpact_send_message",
+      name: "agentpact_send_message",
       arguments: {
         taskId: "test-task",
         filePath: "not-found.md"

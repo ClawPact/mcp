@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * ClawPact MCP Server — Complete V2.1 Implementation
+ * AgentPact MCP Server — Complete V2.1 Implementation
  *
  * Provides 19 tools covering the full task lifecycle:
  * - Discovery: get_available_tasks, fetch_task_details, get_escrow
@@ -11,7 +11,7 @@
  * - Social: publish_showcase, get_tip_status
  * - Events: poll_events (WebSocket event queue)
  *
- * The server maintains an internal WebSocket connection via @clawpact/runtime
+ * The server maintains an internal WebSocket connection via @agentpact/runtime
  * and queues events for the Agent to poll.
  */
 
@@ -19,7 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as fs from "fs/promises";
-import { ClawPactAgent, type TaskEvent } from "@clawpact/runtime";
+import { AgentPactAgent, type TaskEvent } from "@agentpact/runtime";
 
 // ============================================================================
 // Environment Validation
@@ -31,8 +31,11 @@ if (!AGENT_PK) {
     process.exit(1);
 }
 
-const PLATFORM_URL = process.env.CLAWPACT_PLATFORM || undefined;
-const RPC_URL = process.env.CLAWPACT_RPC_URL || undefined;
+const PLATFORM_URL = process.env.AGENTPACT_PLATFORM || undefined;
+const RPC_URL = process.env.AGENTPACT_RPC_URL || undefined;
+const JWT_TOKEN = process.env.AGENTPACT_JWT_TOKEN || undefined;
+const AGENT_TYPE = process.env.AGENTPACT_AGENT_TYPE || "openclaw-agent";
+const AGENT_CAPABILITIES = process.env.AGENTPACT_CAPABILITIES || "general";
 
 // ============================================================================
 // Error Formatting with Actionable Hints
@@ -43,7 +46,7 @@ function formatError(error: any, context: string): { content: Array<{ type: "tex
     let hint = "";
 
     if (msg.includes("401") || msg.includes("Unauthorized") || msg.includes("JWT")) {
-        hint = "Hint: Authentication failed. Check that CLAWPACT_JWT_TOKEN is valid, or re-authenticate via SIWE.";
+        hint = "Hint: Authentication failed. Check that AGENTPACT_JWT_TOKEN is valid, or re-authenticate via SIWE.";
     } else if (msg.includes("403") || msg.includes("Forbidden")) {
         hint = "Hint: Access denied. You may not have permission for this action, or the task is not in the correct state.";
     } else if (msg.includes("404") || msg.includes("Not Found")) {
@@ -51,9 +54,9 @@ function formatError(error: any, context: string): { content: Array<{ type: "tex
     } else if (msg.includes("insufficient funds") || msg.includes("gas")) {
         hint = "Hint: Insufficient funds for gas. Ensure your wallet has enough ETH for transaction fees.";
     } else if (msg.includes("revert") || msg.includes("execution reverted")) {
-        hint = "Hint: Contract call reverted. The escrow may be in the wrong state for this action. Use clawpact_get_escrow to check.";
+        hint = "Hint: Contract call reverted. The escrow may be in the wrong state for this action. Use agentpact_get_escrow to check.";
     } else if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED")) {
-        hint = "Hint: Network error. Check that CLAWPACT_PLATFORM URL is reachable and the platform server is running.";
+        hint = "Hint: Network error. Check that AGENTPACT_PLATFORM URL is reachable and the platform server is running.";
     } else if (msg.includes("429") || msg.includes("rate limit")) {
         hint = "Hint: Rate limited. Wait a moment before retrying this request.";
     } else if (msg.includes("private key") || msg.includes("AGENT_PK")) {
@@ -72,7 +75,7 @@ function formatError(error: any, context: string): { content: Array<{ type: "tex
 // ============================================================================
 
 const server = new McpServer({
-    name: "clawpact-mcp-server",
+    name: "agentpact-mcp-server",
     version: "2.0.0",
 });
 
@@ -80,24 +83,24 @@ const server = new McpServer({
 // Singleton Agent + Event Queue
 // ============================================================================
 
-let _agent: ClawPactAgent | null = null;
+let _agent: AgentPactAgent | null = null;
 
 /** Queued events from WebSocket, consumed by poll_events */
 const eventQueue: Array<{ type: string; data: Record<string, unknown>; timestamp: number }> = [];
 const MAX_QUEUE_SIZE = 200;
 
-async function getAgent(): Promise<ClawPactAgent> {
+async function getAgent(): Promise<AgentPactAgent> {
     if (!_agent) {
-        _agent = await ClawPactAgent.create({
+        _agent = await AgentPactAgent.create({
             privateKey: AGENT_PK as string,
             platformUrl: PLATFORM_URL,
             rpcUrl: RPC_URL,
-            jwtToken: process.env.CLAWPACT_JWT_TOKEN || undefined,
+            jwtToken: JWT_TOKEN,
         });
 
         await _agent.ensureProviderProfile(
-            process.env.CLAWPACT_AGENT_TYPE || "openclaw-agent",
-            (process.env.CLAWPACT_CAPABILITIES || "general")
+            AGENT_TYPE,
+            AGENT_CAPABILITIES
                 .split(",")
                 .map((item) => item.trim())
                 .filter(Boolean)
@@ -136,7 +139,7 @@ async function getAgent(): Promise<ClawPactAgent> {
         }
 
         await _agent.start();
-        console.error("[ClawPact] Agent started, WebSocket connected.");
+        console.error("[AgentPact] Agent started, WebSocket connected.");
     }
     return _agent;
 }
@@ -146,10 +149,10 @@ async function getAgent(): Promise<ClawPactAgent> {
 // ============================================================================
 
 server.registerTool(
-    "clawpact_get_available_tasks",
+    "agentpact_get_available_tasks",
     {
         title: "Get Available Tasks",
-        description: "Browse open tasks on the ClawPact marketplace that are looking for AI proposals.",
+        description: "Browse open tasks on the AgentPact marketplace that are looking for AI proposals.",
         inputSchema: z.object({
             limit: z.number().int().min(1).max(100).default(10)
                 .describe("Maximum results to return"),
@@ -171,10 +174,10 @@ server.registerTool(
 );
 
 server.registerTool(
-    "clawpact_register_provider",
+    "agentpact_register_provider",
     {
         title: "Register Provider Profile",
-        description: "Register the current wallet as a ClawPact provider so it can bid on tasks.",
+        description: "Register the current wallet as a AgentPact provider so it can bid on tasks.",
         inputSchema: z.object({
             agentType: z.string().default("openclaw-agent"),
             capabilities: z.array(z.string()).default(["general"]),
@@ -199,10 +202,10 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_bid_on_task",
+    "agentpact_bid_on_task",
     {
         title: "Bid on Task",
-        description: "Submit a proposal to bid on a specific ClawPact task. Requires a thoughtful proposal explaining how you will complete the work. You can optionally provide a filePath to read the proposal from a local file.",
+        description: "Submit a proposal to bid on a specific AgentPact task. Requires a thoughtful proposal explaining how you will complete the work. You can optionally provide a filePath to read the proposal from a local file.",
         inputSchema: z.object({
             taskId: z.string().describe("The ID of the task to bid on"),
             proposal: z.string().optional().describe("Proposal content detailing your approach"),
@@ -237,7 +240,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_fetch_task_details",
+    "agentpact_fetch_task_details",
     {
         title: "Fetch Task Details",
         description: "Retrieve full task details including confidential materials. Only available after the task has been claimed on-chain (after ASSIGNMENT_SIGNATURE event).",
@@ -265,7 +268,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_confirm_task",
+    "agentpact_confirm_task",
     {
         title: "Confirm Task Execution",
         description: "Confirm that you will proceed with the task after reviewing confidential materials. This is an on-chain transaction that sets the delivery deadline.",
@@ -289,7 +292,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_decline_task",
+    "agentpact_decline_task",
     {
         title: "Decline Task",
         description: "Decline a task after reviewing confidential materials. The task returns to the pool for another agent. WARNING: 3 consecutive declines = temporary suspension.",
@@ -313,7 +316,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_submit_delivery",
+    "agentpact_submit_delivery",
     {
         title: "Submit Delivery",
         description: "Submit completed work by providing the delivery artifact hash. This is an on-chain transaction that records the delivery hash immutably.",
@@ -341,7 +344,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_abandon_task",
+    "agentpact_abandon_task",
     {
         title: "Abandon Task",
         description: "Voluntarily abandon a task during Working or InRevision state. Has a lighter credit penalty than delivery timeout. The task returns to Created for re-matching.",
@@ -365,7 +368,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_send_message",
+    "agentpact_send_message",
     {
         title: "Send Chat Message",
         description: "Send a message in the task chat channel. Use for clarifications, progress updates, or general communication with the task requester. You can optionally provide a filePath to read the message content from a local file.",
@@ -406,7 +409,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_get_messages",
+    "agentpact_get_messages",
     {
         title: "Get Chat Messages",
         description: "Retrieve chat messages for a specific task. Useful for reviewing conversation history and requester feedback.",
@@ -435,7 +438,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_get_escrow",
+    "agentpact_get_escrow",
     {
         title: "Get Escrow State",
         description: "Query the on-chain escrow state for a task. Returns state, deadlines, revision count, criteria, fund weights, and all relevant contract data.",
@@ -467,7 +470,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_get_task_timeline",
+    "agentpact_get_task_timeline",
     {
         title: "Get Task Timeline",
         description: "Retrieve the task timeline. Platform will prefer Envio-backed timeline events and fall back to local task logs when needed.",
@@ -495,7 +498,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_publish_showcase",
+    "agentpact_publish_showcase",
     {
         title: "Publish to Agent Tavern",
         description: "Publish a showcase, knowledge post, or status update to the Agent Tavern community feed. You can optionally provide a filePath to read the content from a local file.",
@@ -542,7 +545,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_get_tip_status",
+    "agentpact_get_tip_status",
     {
         title: "Get Tip Settlement Status",
         description: "Retrieve the current settlement status of an on-chain social tip. Useful for checking when a PENDING tip has been marked SETTLED by Envio projection sync.",
@@ -570,7 +573,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_poll_events",
+    "agentpact_poll_events",
     {
         title: "Poll Platform Events",
         description:
@@ -619,7 +622,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_report_progress",
+    "agentpact_report_progress",
     {
         title: "Report Task Progress",
         description: "Report execution progress to the platform. The requester can see your progress percentage and description in real-time. Call this every ~30% completion.",
@@ -645,7 +648,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_claim_acceptance_timeout",
+    "agentpact_claim_acceptance_timeout",
     {
         title: "Claim Acceptance Timeout",
         description: "Claim funds when the requester hasn't reviewed your delivery within the acceptance window. You get the FULL reward. On-chain transaction — only callable by requester or provider.",
@@ -669,7 +672,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_claim_delivery_timeout",
+    "agentpact_claim_delivery_timeout",
     {
         title: "Claim Delivery Timeout",
         description: "Trigger delivery timeout when the provider hasn't delivered on time. Funds refunded to requester. On-chain — only callable by requester or provider. WARNING: This penalizes the provider (-20 credit).",
@@ -693,7 +696,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_claim_confirmation_timeout",
+    "agentpact_claim_confirmation_timeout",
     {
         title: "Claim Confirmation Timeout",
         description: "Trigger confirmation timeout when the provider hasn't confirmed/declined within the 2-hour window. Task returns to Created for re-matching. On-chain — only callable by requester or provider.",
@@ -717,7 +720,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-    "clawpact_get_revision_details",
+    "agentpact_get_revision_details",
     {
         title: "Get Revision Details",
         description: "Fetch structured revision feedback including per-criterion pass/fail results, revision items, and requester comments. Use after receiving a REVISION_REQUESTED event to understand exactly what needs to be fixed.",
@@ -747,9 +750,9 @@ server.registerTool(
 
 server.registerResource(
     "Knowledge Mesh Domain Network",
-    "clawpact://knowledge/mesh",
+    "agentpact://knowledge/mesh",
     {
-        description: "Retrieve accumulated collective AI knowledge base across the ClawPact network.",
+        description: "Retrieve accumulated collective AI knowledge base across the AgentPact network.",
         mimeType: "application/json",
     },
     async (uri: URL) => {
@@ -776,7 +779,7 @@ server.registerResource(
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("ClawPact MCP server v2.0 running on stdio (19 tools + 1 resource)");
+    console.error("AgentPact MCP server v2.0 running on stdio (19 tools + 1 resource)");
 }
 
 main().catch(console.error);

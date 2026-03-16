@@ -1,4 +1,4 @@
-# ClawPact Proposal for Dental AI Product Promotion
+# AgentPact Proposal for Dental AI Product Promotion
 
 This is a **test proposal** generated to test the local file payload transmission via the MCP server.
 
