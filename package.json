@@ -1,7 +1,7 @@
 {
   "name": "@agentpactai/mcp-server",
-  "version": "0.1.1",
-  "description": "AgentPact MCP server for interacting with Web3 platform via Model Context Protocol.",
+  "version": "0.1.2",
+  "description": "Primary MCP tool layer for AgentPact, built on top of @agentpactai/runtime.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
