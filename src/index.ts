@@ -21,6 +21,33 @@ import { z } from "zod";
 import * as fs from "fs/promises";
 import { AgentPactAgent, type TaskEvent } from "@agentpactai/runtime";
 
+interface PersistedNotification {
+    id: string;
+    userId: string;
+    event: string;
+    data: Record<string, unknown> | null;
+    readAt: string | null;
+    createdAt: string;
+}
+
+type AgentWithNotifications = AgentPactAgent & {
+    getNotifications(options?: {
+        limit?: number;
+        offset?: number;
+        unreadOnly?: boolean;
+    }): Promise<{
+        notifications: PersistedNotification[];
+        unreadCount: number;
+        pagination: { total: number; limit: number; offset: number };
+    }>;
+    markNotificationsRead(notificationId?: string): Promise<{
+        success: boolean;
+        updatedCount?: number;
+        readAt?: string;
+        notification?: PersistedNotification;
+    }>;
+};
+
 // ============================================================================
 // Environment Validation
 // ============================================================================
@@ -622,6 +649,93 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
+    "agentpact_get_notifications",
+    {
+        title: "Get Notification History",
+        description:
+            "Fetch persisted user notifications from the AgentPact notification center. " +
+            "Use this to recover missed assignment, revision, invite, and clarification events after reconnects or restarts.",
+        inputSchema: z.object({
+            limit: z.number().int().min(1).max(100).default(20)
+                .describe("Maximum notifications to return"),
+            offset: z.number().int().min(0).default(0)
+                .describe("Pagination offset"),
+            unreadOnly: z.boolean().default(false)
+                .describe("Return only unread notifications"),
+        }).strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithNotifications;
+            const result = await agent.getNotifications({
+                limit: params.limit,
+                offset: params.offset,
+                unreadOnly: params.unreadOnly,
+            });
+
+            if (result.notifications.length === 0) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `No notifications found. unreadCount=${result.unreadCount}`,
+                    }],
+                    structuredContent: result as any,
+                };
+            }
+
+            return {
+                content: [{
+                    type: "text",
+                    text:
+                        `Fetched ${result.notifications.length} notification(s), unread=${result.unreadCount}.\n\n` +
+                        result.notifications
+                            .map((item) =>
+                                `[${item.createdAt}] ${item.event}${item.readAt ? " [read]" : " [unread]"}: ${JSON.stringify(item.data)}`
+                            )
+                            .join("\n"),
+                }],
+                structuredContent: result as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "get_notifications");
+        }
+    }
+);
+
+server.registerTool(
+    "agentpact_mark_notifications_read",
+    {
+        title: "Mark Notifications Read",
+        description:
+            "Mark one notification or the whole notification inbox as read in the AgentPact notification center.",
+        inputSchema: z.object({
+            notificationId: z.string().optional()
+                .describe("Specific notification ID to mark as read. Omit to mark all notifications as read."),
+        }).strict(),
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithNotifications;
+            const result = await agent.markNotificationsRead(params.notificationId);
+
+            return {
+                content: [{
+                    type: "text",
+                    text: params.notificationId
+                        ? `Notification marked as read: ${params.notificationId}`
+                        : `All notifications marked as read. updated=${result.updatedCount ?? 0}`,
+                }],
+                structuredContent: result as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "mark_notifications_read");
+        }
+    }
+);
+
+server.registerTool(
     "agentpact_report_progress",
     {
         title: "Report Task Progress",
@@ -779,7 +893,7 @@ server.registerResource(
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("AgentPact MCP server v2.0 running on stdio (19 tools + 1 resource)");
+    console.error("AgentPact MCP server v2.0 running on stdio");
 }
 
 main().catch(console.error);
