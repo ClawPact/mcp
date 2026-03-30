@@ -3,7 +3,9 @@
 /**
  * AgentPact MCP Server — Complete V2.1 Implementation
  *
- * Provides 19 tools covering the full task lifecycle:
+ * Provides 26 tools covering the full task lifecycle:
+ * - Wallet: get_wallet_overview, get_token_balance, get_token_allowance
+ * - Transactions: get_gas_quote, preflight_check, approve_token, get_transaction_status, wait_for_transaction
  * - Discovery: get_available_tasks, fetch_task_details, get_escrow
  * - Bidding: bid_on_task
  * - Lifecycle: confirm_task, decline_task, abandon_task, submit_delivery
@@ -45,6 +47,109 @@ type AgentWithNotifications = AgentPactAgent & {
         updatedCount?: number;
         readAt?: string;
         notification?: PersistedNotification;
+    }>;
+};
+
+type AgentWithWalletOverview = AgentPactAgent & {
+    walletAddress: `0x${string}`;
+    platformConfig: {
+        usdcAddress: `0x${string}`;
+        escrowAddress: `0x${string}`;
+        tipJarAddress: `0x${string}`;
+    };
+    getWalletOverview(): Promise<{
+        chainId: number;
+        walletAddress: `0x${string}`;
+        nativeTokenSymbol: "ETH";
+        nativeBalanceWei: bigint;
+        nativeBalanceEth: string;
+        usdc: {
+            tokenAddress: `0x${string}`;
+            symbol: string;
+            decimals: number;
+            raw: bigint;
+            formatted: string;
+        };
+    }>;
+    getTokenBalanceInfo(token: `0x${string}`): Promise<{
+        tokenAddress: `0x${string}`;
+        symbol: string;
+        decimals: number;
+        raw: bigint;
+        formatted: string;
+    }>;
+    getTokenAllowance(token: `0x${string}`, spender: `0x${string}`): Promise<bigint>;
+    approveToken(token: `0x${string}`, spender: `0x${string}`, amount?: bigint): Promise<string>;
+    getGasQuote(params: {
+        action: "approve_token" | "confirm_task" | "decline_task" | "submit_delivery" | "abandon_task" | "claim_acceptance_timeout" | "claim_delivery_timeout" | "claim_confirmation_timeout";
+        tokenAddress?: `0x${string}`;
+        spender?: `0x${string}`;
+        amount?: bigint;
+        escrowId?: bigint;
+        deliveryHash?: `0x${string}`;
+    }): Promise<{
+        action: string;
+        chainId: number;
+        walletAddress: `0x${string}`;
+        target: `0x${string}`;
+        feeModel: "legacy" | "eip1559";
+        gasEstimate: bigint;
+        gasLimitSuggested: bigint;
+        gasPriceWei?: bigint;
+        maxFeePerGasWei?: bigint;
+        maxPriorityFeePerGasWei?: bigint;
+        estimatedTotalCostWei: bigint;
+        estimatedTotalCostEth: string;
+    }>;
+    preflightCheck(params?: {
+        action?: "approve_token" | "confirm_task" | "decline_task" | "submit_delivery" | "abandon_task" | "claim_acceptance_timeout" | "claim_delivery_timeout" | "claim_confirmation_timeout";
+        tokenAddress?: `0x${string}`;
+        spender?: `0x${string}`;
+        requiredAmount?: bigint;
+        escrowId?: bigint;
+        deliveryHash?: `0x${string}`;
+        minNativeBalanceWei?: bigint;
+    }): Promise<{
+        action?: string;
+        chainId: number;
+        expectedChainId: number;
+        walletAddress: `0x${string}`;
+        chainOk: boolean;
+        nativeBalanceWei: bigint;
+        nativeBalanceEth: string;
+        minNativeBalanceWei?: bigint;
+        gasQuote?: unknown;
+        gasBalanceOk?: boolean;
+        token?: unknown;
+        tokenBalanceOk?: boolean;
+        allowance?: unknown;
+        canProceed: boolean;
+        blockingReasons: string[];
+        notes: string[];
+    }>;
+    getTransactionStatus(hash: `0x${string}`): Promise<{
+        transactionHash: `0x${string}`;
+        status: "pending" | "success" | "reverted" | "not_found";
+        found: boolean;
+        confirmations: number;
+        blockNumber?: bigint;
+        gasUsed?: bigint;
+        effectiveGasPrice?: bigint;
+        explorerUrl?: string;
+    }>;
+    waitForTransaction(
+        hash: `0x${string}`,
+        options?: {
+            confirmations?: number;
+            timeoutMs?: number;
+        }
+    ): Promise<{
+        transactionHash: `0x${string}`;
+        status: "success" | "reverted";
+        blockNumber: bigint;
+        gasUsed: bigint;
+        effectiveGasPrice?: bigint;
+        explorerUrl?: string;
     }>;
 };
 
@@ -95,6 +200,86 @@ function formatError(error: any, context: string): { content: Array<{ type: "tex
         : `Error in ${context}: ${msg}`;
 
     return { content: [{ type: "text" as const, text }] };
+}
+
+function serializeForMcp(value: unknown): string {
+    return JSON.stringify(
+        value,
+        (_, current) => (typeof current === "bigint" ? current.toString() + "n" : current),
+        2
+    );
+}
+
+function formatUnitsString(value: bigint, decimals: number): string {
+    const negative = value < 0n;
+    const absolute = negative ? -value : value;
+
+    if (decimals === 0) {
+        return `${negative ? "-" : ""}${absolute.toString()}`;
+    }
+
+    const base = 10n ** BigInt(decimals);
+    const whole = absolute / base;
+    const fraction = absolute % base;
+    const fractionString = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
+    const formatted = fractionString.length > 0
+        ? `${whole.toString()}.${fractionString}`
+        : whole.toString();
+
+    return negative ? `-${formatted}` : formatted;
+}
+
+const addressSchema = z.string()
+    .regex(/^0x[a-fA-F0-9]{40}$/, "Expected a 20-byte hex address");
+
+const hashSchema = z.string()
+    .regex(/^0x[a-fA-F0-9]{64}$/, "Expected a 32-byte transaction hash");
+
+const gasQuoteActionSchema = z.enum([
+    "approve_token",
+    "confirm_task",
+    "decline_task",
+    "submit_delivery",
+    "abandon_task",
+    "claim_acceptance_timeout",
+    "claim_delivery_timeout",
+    "claim_confirmation_timeout",
+]);
+
+const preflightPresetSchema = z.enum([
+    "approve_usdc_to_escrow",
+    "approve_usdc_to_tipjar",
+]);
+
+function resolveActionPreset(
+    agent: AgentWithWalletOverview,
+    params: {
+        action?: "approve_token" | "confirm_task" | "decline_task" | "submit_delivery" | "abandon_task" | "claim_acceptance_timeout" | "claim_delivery_timeout" | "claim_confirmation_timeout";
+        tokenAddress?: `0x${string}`;
+        spender?: `0x${string}`;
+    },
+    preset?: "approve_usdc_to_escrow" | "approve_usdc_to_tipjar"
+): {
+    action?: "approve_token" | "confirm_task" | "decline_task" | "submit_delivery" | "abandon_task" | "claim_acceptance_timeout" | "claim_delivery_timeout" | "claim_confirmation_timeout";
+    tokenAddress?: `0x${string}`;
+    spender?: `0x${string}`;
+} {
+    if (!preset) {
+        return params;
+    }
+
+    const resolved = { ...params };
+    if (preset === "approve_usdc_to_escrow") {
+        resolved.action ??= "approve_token";
+        resolved.tokenAddress ??= agent.platformConfig.usdcAddress;
+        resolved.spender ??= agent.platformConfig.escrowAddress;
+    } else if (preset === "approve_usdc_to_tipjar") {
+        resolved.action ??= "approve_token";
+        resolved.tokenAddress ??= agent.platformConfig.usdcAddress;
+        resolved.spender ??= agent.platformConfig.tipJarAddress;
+    }
+
+    return resolved;
 }
 
 // ============================================================================
@@ -225,7 +410,318 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 2: Bid on Task
+// Tool 2: Wallet Overview
+// ============================================================================
+
+server.registerTool(
+    "agentpact_get_wallet_overview",
+    {
+        title: "Get Wallet Overview",
+        description: "Return the current agent wallet address together with its ETH gas balance and configured USDC balance.",
+        inputSchema: z.object({}).strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async () => {
+        try {
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const overview = await agent.getWalletOverview();
+            const serialized = serializeForMcp(overview);
+            return {
+                content: [{ type: "text", text: serialized }],
+                structuredContent: { wallet: JSON.parse(serialized) } as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "get_wallet_overview");
+        }
+    }
+);
+
+// ============================================================================
+// Tool 3: Token Balance
+// ============================================================================
+
+server.registerTool(
+    "agentpact_get_token_balance",
+    {
+        title: "Get Token Balance",
+        description: "Read the current agent wallet's balance for an arbitrary ERC20 token address.",
+        inputSchema: z.object({
+            tokenAddress: addressSchema.describe("ERC20 token contract address"),
+        }).strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const balance = await agent.getTokenBalanceInfo(params.tokenAddress as `0x${string}`);
+            const serialized = serializeForMcp({
+                walletAddress: agent.walletAddress,
+                balance,
+            });
+            return {
+                content: [{ type: "text", text: serialized }],
+                structuredContent: JSON.parse(serialized) as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "get_token_balance");
+        }
+    }
+);
+
+server.registerTool(
+    "agentpact_get_gas_quote",
+    {
+        title: "Get Gas Quote",
+        description: "Estimate gas and fee cost for a supported AgentPact write action before submitting a transaction.",
+        inputSchema: z.object({
+            preset: preflightPresetSchema.optional()
+                .describe("Optional shortcut for common approve flows such as USDC -> escrow or USDC -> tipjar"),
+            action: gasQuoteActionSchema.describe("Supported action to estimate"),
+            tokenAddress: addressSchema.optional()
+                .describe("Required for approve_token"),
+            spender: addressSchema.optional()
+                .describe("Required for approve_token"),
+            amount: z.string().optional()
+                .describe("Base-unit integer amount used for approve_token exact approval"),
+            escrowId: z.string().optional()
+                .describe("Required for task lifecycle and timeout actions"),
+            deliveryHash: hashSchema.optional()
+                .describe("Required for submit_delivery"),
+        }).strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const resolved = resolveActionPreset(agent, {
+                action: params.action,
+                tokenAddress: params.tokenAddress as `0x${string}` | undefined,
+                spender: params.spender as `0x${string}` | undefined,
+            }, params.preset);
+            const quote = await agent.getGasQuote({
+                action: resolved.action!,
+                tokenAddress: resolved.tokenAddress,
+                spender: resolved.spender,
+                amount: params.amount ? BigInt(params.amount) : undefined,
+                escrowId: params.escrowId ? BigInt(params.escrowId) : undefined,
+                deliveryHash: params.deliveryHash as `0x${string}` | undefined,
+            });
+            const serialized = serializeForMcp(quote);
+            return {
+                content: [{ type: "text", text: serialized }],
+                structuredContent: { quote: JSON.parse(serialized) } as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "get_gas_quote");
+        }
+    }
+);
+
+server.registerTool(
+    "agentpact_preflight_check",
+    {
+        title: "Preflight Check",
+        description: "Run a lightweight safety check before a gas-spending or token-spending action. Returns wallet, chain, gas, balance, allowance, and proceed recommendation.",
+        inputSchema: z.object({
+            preset: preflightPresetSchema.optional()
+                .describe("Optional shortcut for common approve flows such as USDC -> escrow or USDC -> tipjar"),
+            action: gasQuoteActionSchema.optional()
+                .describe("Optional action to estimate and validate before sending"),
+            tokenAddress: addressSchema.optional()
+                .describe("Optional ERC20 token address to check"),
+            spender: addressSchema.optional()
+                .describe("Optional spender address for allowance checks"),
+            requiredAmount: z.string().optional()
+                .describe("Optional base-unit integer amount to require for token balance / allowance"),
+            escrowId: z.string().optional()
+                .describe("Escrow ID for action-aware checks"),
+            deliveryHash: hashSchema.optional()
+                .describe("Delivery hash for submit_delivery checks"),
+            minNativeBalanceWei: z.string().optional()
+                .describe("Optional explicit ETH threshold in wei"),
+        }).strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const resolved = resolveActionPreset(agent, {
+                action: params.action,
+                tokenAddress: params.tokenAddress as `0x${string}` | undefined,
+                spender: params.spender as `0x${string}` | undefined,
+            }, params.preset);
+            const result = await agent.preflightCheck({
+                action: resolved.action,
+                tokenAddress: resolved.tokenAddress,
+                spender: resolved.spender,
+                requiredAmount: params.requiredAmount ? BigInt(params.requiredAmount) : undefined,
+                escrowId: params.escrowId ? BigInt(params.escrowId) : undefined,
+                deliveryHash: params.deliveryHash as `0x${string}` | undefined,
+                minNativeBalanceWei: params.minNativeBalanceWei ? BigInt(params.minNativeBalanceWei) : undefined,
+            });
+            const serialized = serializeForMcp(result);
+            return {
+                content: [{ type: "text", text: serialized }],
+                structuredContent: { preflight: JSON.parse(serialized) } as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "preflight_check");
+        }
+    }
+);
+
+server.registerTool(
+    "agentpact_get_transaction_status",
+    {
+        title: "Get Transaction Status",
+        description: "Read the latest observable status of a transaction without waiting. Returns pending, success, reverted, or not_found.",
+        inputSchema: z.object({
+            txHash: hashSchema.describe("Transaction hash to inspect"),
+        }).strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const status = await agent.getTransactionStatus(params.txHash as `0x${string}`);
+            const serialized = serializeForMcp(status);
+            return {
+                content: [{ type: "text", text: serialized }],
+                structuredContent: { transaction: JSON.parse(serialized) } as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "get_transaction_status");
+        }
+    }
+);
+
+server.registerTool(
+    "agentpact_get_token_allowance",
+    {
+        title: "Get Token Allowance",
+        description: "Read the current agent wallet's ERC20 allowance for a spender contract.",
+        inputSchema: z.object({
+            tokenAddress: addressSchema.describe("ERC20 token contract address"),
+            spender: addressSchema.describe("Contract or wallet allowed to spend the token"),
+        }).strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const [allowance, token] = await Promise.all([
+                agent.getTokenAllowance(
+                    params.tokenAddress as `0x${string}`,
+                    params.spender as `0x${string}`
+                ),
+                agent.getTokenBalanceInfo(params.tokenAddress as `0x${string}`),
+            ]);
+            const serialized = serializeForMcp({
+                owner: agent.walletAddress,
+                spender: params.spender,
+                token: {
+                    tokenAddress: token.tokenAddress,
+                    symbol: token.symbol,
+                    decimals: token.decimals,
+                },
+                allowanceRaw: allowance,
+                allowanceFormatted: formatUnitsString(allowance, token.decimals),
+            });
+            return {
+                content: [{ type: "text", text: serialized }],
+                structuredContent: JSON.parse(serialized) as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "get_token_allowance");
+        }
+    }
+);
+
+server.registerTool(
+    "agentpact_approve_token",
+    {
+        title: "Approve Token",
+        description: "Submit an ERC20 approve transaction from the current agent wallet. Exact mode expects a base-unit integer string.",
+        inputSchema: z.object({
+            tokenAddress: addressSchema.describe("ERC20 token contract address"),
+            spender: addressSchema.describe("Contract or wallet allowed to spend the token"),
+            mode: z.enum(["max", "exact"]).default("max")
+                .describe("Use 'max' for unlimited approval, or 'exact' to approve the provided base-unit amount"),
+            amount: z.string().optional()
+                .describe("Base-unit integer amount required when mode='exact' (for example 1000000 for 1.0 USDC)"),
+        }).strict(),
+    },
+    async (params) => {
+        try {
+            let amount: bigint | undefined;
+            if (params.mode === "exact") {
+                if (!params.amount) {
+                    throw new Error("amount is required when mode='exact'");
+                }
+                amount = BigInt(params.amount);
+            }
+
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const txHash = await agent.approveToken(
+                params.tokenAddress as `0x${string}`,
+                params.spender as `0x${string}`,
+                amount
+            );
+            return {
+                content: [{
+                    type: "text",
+                    text: `Approval transaction submitted. TX: ${txHash}`,
+                }],
+                structuredContent: {
+                    txHash,
+                    mode: params.mode,
+                    amount: amount?.toString() ?? "max",
+                    tokenAddress: params.tokenAddress,
+                    spender: params.spender,
+                } as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "approve_token");
+        }
+    }
+);
+
+server.registerTool(
+    "agentpact_wait_for_transaction",
+    {
+        title: "Wait For Transaction",
+        description: "Wait for a transaction receipt and return status, gas usage, and explorer link.",
+        inputSchema: z.object({
+            txHash: hashSchema.describe("Transaction hash to wait for"),
+            confirmations: z.number().int().min(1).max(25).default(1)
+                .describe("How many confirmations to wait for"),
+            timeoutMs: z.number().int().min(1000).max(600000).optional()
+                .describe("Optional timeout in milliseconds"),
+        }).strict(),
+    },
+    async (params) => {
+        try {
+            const agent = (await getAgent()) as AgentWithWalletOverview;
+            const receipt = await agent.waitForTransaction(
+                params.txHash as `0x${string}`,
+                {
+                    confirmations: params.confirmations,
+                    timeoutMs: params.timeoutMs,
+                }
+            );
+            const serialized = serializeForMcp(receipt);
+            return {
+                content: [{ type: "text", text: serialized }],
+                structuredContent: { receipt: JSON.parse(serialized) } as any,
+            };
+        } catch (error: any) {
+            return formatError(error, "wait_for_transaction");
+        }
+    }
+);
+
+// ============================================================================
+// Tool 7: Bid on Task
 // ============================================================================
 
 server.registerTool(
@@ -263,7 +759,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 3: Fetch Task Details (confidential materials)
+// Tool 8: Fetch Task Details (confidential materials)
 // ============================================================================
 
 server.registerTool(
@@ -291,7 +787,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 4: Confirm Task
+// Tool 9: Confirm Task
 // ============================================================================
 
 server.registerTool(
@@ -315,7 +811,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 5: Decline Task
+// Tool 10: Decline Task
 // ============================================================================
 
 server.registerTool(
@@ -339,7 +835,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 6: Submit Delivery
+// Tool 11: Submit Delivery
 // ============================================================================
 
 server.registerTool(
@@ -367,7 +863,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 7: Abandon Task
+// Tool 8: Abandon Task
 // ============================================================================
 
 server.registerTool(
@@ -391,7 +887,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 8: Send Message (Task Chat)
+// Tool 9: Send Message (Task Chat)
 // ============================================================================
 
 server.registerTool(
@@ -432,7 +928,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 9: Get Messages (Task Chat)
+// Tool 10: Get Messages (Task Chat)
 // ============================================================================
 
 server.registerTool(
@@ -461,7 +957,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 10: Get Escrow State
+// Tool 11: Get Escrow State
 // ============================================================================
 
 server.registerTool(
@@ -479,9 +975,7 @@ server.registerTool(
             const agent = await getAgent();
             const escrow = await agent.client.getEscrow(BigInt(params.escrowId));
             // Serialize bigints for JSON output with 'n' suffix to indicate BigInt type
-            const serialized = JSON.stringify(escrow, (_, v) =>
-                typeof v === "bigint" ? v.toString() + "n" : v, 2
-            );
+            const serialized = serializeForMcp(escrow);
             return {
                 content: [{ type: "text", text: serialized }],
                 structuredContent: { escrow: JSON.parse(serialized) } as any,
@@ -493,7 +987,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 11: Get Task Timeline
+// Tool 12: Get Task Timeline
 // ============================================================================
 
 server.registerTool(
@@ -521,7 +1015,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 12: Publish Showcase
+// Tool 13: Publish Showcase
 // ============================================================================
 
 server.registerTool(
@@ -568,7 +1062,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 13: Get Tip Status
+// Tool 14: Get Tip Status
 // ============================================================================
 
 server.registerTool(
@@ -596,7 +1090,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 14: Poll Events (WebSocket Event Queue)
+// Tool 15: Poll Events (WebSocket Event Queue)
 // ============================================================================
 
 server.registerTool(
@@ -645,7 +1139,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 15: Report Progress
+// Tool 16: Report Progress
 // ============================================================================
 
 server.registerTool(
@@ -758,7 +1252,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 16: Claim Acceptance Timeout
+// Tool 17: Claim Acceptance Timeout
 // ============================================================================
 
 server.registerTool(
@@ -782,7 +1276,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 17: Claim Delivery Timeout
+// Tool 18: Claim Delivery Timeout
 // ============================================================================
 
 server.registerTool(
@@ -806,7 +1300,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 18: Claim Confirmation Timeout
+// Tool 19: Claim Confirmation Timeout
 // ============================================================================
 
 server.registerTool(
@@ -830,7 +1324,7 @@ server.registerTool(
 );
 
 // ============================================================================
-// Tool 19: Get Revision Details
+// Tool 20: Get Revision Details
 // ============================================================================
 
 server.registerTool(
