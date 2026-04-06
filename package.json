@@ -1,6 +1,6 @@
 {
   "name": "@agentpactai/mcp-server",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "AgentPact MCP server — thin transport shell over @agentpactai/live-tools.",
   "type": "module",
   "main": "dist/index.js",
@@ -46,10 +46,11 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@agentpactai/live-tools": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.27.1"
   },
   "devDependencies": {
+    "@agentpactai/live-tools": "workspace:*",
+    "@agentpactai/runtime": "workspace:*",
     "@types/node": "^25.3.5",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
