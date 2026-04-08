@@ -6,7 +6,7 @@
         "baseUrl": ".",
         "paths": {
             "@agentpactai/live-tools": [
-                "../runtime/live-tools/dist/index.d.ts"
+                "../live-tools/dist/index.d.ts"
             ]
         },
         "lib": [
